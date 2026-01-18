@@ -1,4 +1,4 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import ytdl from "npm:@distube/ytdl-core@4.14.4";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -10,93 +10,17 @@ interface RequestBody {
   videoId: string;
 }
 
-async function tryGetVideoUrl(videoUrl: string): Promise<{ url: string | null; error: string }> {
-  const endpoints = [
-    {
-      url: "https://api.cobalt.tools/",
-      headers: {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-      },
-      body: {
-        url: videoUrl,
-        downloadMode: "auto",
-        videoQuality: "720",
-      },
-      parseResponse: (data: Record<string, unknown>) => {
-        if (data.status === "tunnel" || data.status === "redirect") {
-          return data.url as string;
-        }
-        if (data.status === "picker" && Array.isArray(data.picker) && data.picker.length > 0) {
-          return data.picker[0].url as string;
-        }
-        return null;
-      }
-    },
-    {
-      url: "https://co.wuk.sh/api/json",
-      headers: {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-      },
-      body: {
-        url: videoUrl,
-        vCodec: "h264",
-        vQuality: "720",
-        aFormat: "mp3",
-        isAudioOnly: false,
-      },
-      parseResponse: (data: Record<string, unknown>) => {
-        if (data.status === "stream" || data.status === "redirect") {
-          return data.url as string;
-        }
-        if (data.status === "picker" && Array.isArray(data.picker) && data.picker.length > 0) {
-          return data.picker[0].url as string;
-        }
-        if (data.url) {
-          return data.url as string;
-        }
-        return null;
-      }
-    }
-  ];
+interface VideoFormat {
+  url: string;
+  container: string;
+  qualityLabel: string;
+  hasVideo: boolean;
+  hasAudio: boolean;
+}
 
-  let lastError = "";
-
-  for (const endpoint of endpoints) {
-    try {
-      console.log(`Trying: ${endpoint.url}`);
-
-      const response = await fetch(endpoint.url, {
-        method: "POST",
-        headers: endpoint.headers,
-        body: JSON.stringify(endpoint.body),
-      });
-
-      const responseText = await response.text();
-      console.log(`Response from ${endpoint.url}: ${response.status} - ${responseText.substring(0, 500)}`);
-
-      if (response.ok) {
-        try {
-          const data = JSON.parse(responseText);
-          const downloadUrl = endpoint.parseResponse(data);
-          if (downloadUrl) {
-            return { url: downloadUrl, error: "" };
-          }
-          lastError = data.text || data.error?.message || "No download URL returned";
-        } catch {
-          lastError = "Invalid JSON response";
-        }
-      } else {
-        lastError = `HTTP ${response.status}`;
-      }
-    } catch (err) {
-      console.error(`Error with ${endpoint.url}:`, err);
-      lastError = err instanceof Error ? err.message : String(err);
-    }
-  }
-
-  return { url: null, error: lastError };
+// Declare Deno global for TypeScript
+declare global {
+  var Deno: any;
 }
 
 Deno.serve(async (req: Request) => {
@@ -134,35 +58,66 @@ Deno.serve(async (req: Request) => {
 
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
-    const { url: downloadUrl, error: apiError } = await tryGetVideoUrl(videoUrl);
+    // Get video info with retry logic
+    let info;
+    let retryCount = 0;
+    const maxRetries = 3;
 
-    if (!downloadUrl) {
+    while (retryCount < maxRetries) {
+      try {
+        info = await ytdl.getInfo(videoUrl);
+        break;
+      } catch (error) {
+        retryCount++;
+        if (retryCount >= maxRetries) {
+          throw error;
+        }
+        // Wait before retry
+        await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+      }
+    }
+
+    if (!info) {
+      throw new Error("Failed to get video information after retries");
+    }
+
+    console.log(`Video info retrieved: ${info.videoDetails.title}`);
+
+    // Try to find the best format with both video and audio
+    let format = ytdl.chooseFormat(info.formats, {
+      quality: 'highestvideo',
+      filter: (format: VideoFormat) => format.hasVideo && format.hasAudio
+    });
+
+    // If no format with both video and audio, try video only
+    if (!format || !format.url) {
+      format = ytdl.chooseFormat(info.formats, {
+        quality: 'highestvideo',
+        filter: (format: VideoFormat) => format.hasVideo
+      });
+    }
+
+    if (!format || !format.url) {
       return new Response(
         JSON.stringify({
-          error: "Could not process this video. It might be restricted, private, or too long.",
-          details: apiError,
+          error: "No suitable video format found. Please try a different video."
         }),
         {
-          status: 400,
+          status: 404,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         }
       );
     }
 
-    console.log(`Download URL obtained: ${downloadUrl.substring(0, 100)}...`);
+    console.log(`Selected format: ${format.container}, quality: ${format.qualityLabel}`);
 
-    const videoResponse = await fetch(downloadUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-    });
+    // Download video
+    const videoResponse = await fetch(format.url);
 
     if (!videoResponse.ok) {
-      console.error(`Failed to download: ${videoResponse.status}`);
+      console.error(`Failed to download video: ${videoResponse.status} ${videoResponse.statusText}`);
       return new Response(
-        JSON.stringify({ error: "Failed to download video" }),
+        JSON.stringify({ error: "Failed to download video from YouTube" }),
         {
           status: 500,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -171,33 +126,23 @@ Deno.serve(async (req: Request) => {
     }
 
     const videoBlob = await videoResponse.blob();
-    console.log(`Downloaded: ${videoBlob.size} bytes`);
-
-    if (videoBlob.size < 10000) {
-      return new Response(
-        JSON.stringify({ error: "Video download failed - file too small" }),
-        {
-          status: 500,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
-      );
-    }
+    console.log(`Video downloaded successfully: ${videoBlob.size} bytes`);
 
     return new Response(videoBlob, {
       status: 200,
       headers: {
         ...corsHeaders,
-        "Content-Type": "video/mp4",
-        "Content-Disposition": `attachment; filename="youtube-${videoId}.mp4"`,
+        "Content-Type": `video/${format.container}`,
+        "Content-Disposition": `attachment; filename="youtube-${videoId}.${format.container}"`,
       },
     });
 
   } catch (error) {
-    console.error("Error:", error);
+    console.error("Error processing YouTube video:", error);
 
     return new Response(
       JSON.stringify({
-        error: "Failed to process video",
+        error: "Failed to process YouTube video. The video might be restricted, private, or unavailable.",
         details: error instanceof Error ? error.message : String(error)
       }),
       {

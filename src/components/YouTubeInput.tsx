@@ -53,14 +53,7 @@ export function YouTubeInput({ onVideoFetch, disabled }: YouTubeInputProps) {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        const errorMessage = errorData.error || 'Failed to fetch video from YouTube';
-        throw new Error(errorMessage);
-      }
-
-      const contentType = response.headers.get('Content-Type') || '';
-      if (contentType.includes('application/json')) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Unexpected response from server');
+        throw new Error(errorData.error || 'Failed to fetch video from YouTube');
       }
 
       const blob = await response.blob();
@@ -70,15 +63,7 @@ export function YouTubeInput({ onVideoFetch, disabled }: YouTubeInputProps) {
       setUrl('');
     } catch (err) {
       console.error('YouTube fetch error:', err);
-      let errorMessage = 'Failed to fetch video from YouTube';
-      if (err instanceof Error) {
-        if (err.name === 'AbortError') {
-          errorMessage = 'Request timed out. The video might be too large or the server is busy.';
-        } else {
-          errorMessage = err.message;
-        }
-      }
-      setError(errorMessage);
+      setError(err instanceof Error ? err.message : 'Failed to fetch video from YouTube');
     } finally {
       setIsLoading(false);
     }
