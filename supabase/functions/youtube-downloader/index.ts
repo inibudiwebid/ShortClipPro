@@ -10,6 +10,95 @@ interface RequestBody {
   videoId: string;
 }
 
+async function tryGetVideoUrl(videoUrl: string): Promise<{ url: string | null; error: string }> {
+  const endpoints = [
+    {
+      url: "https://api.cobalt.tools/",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+      },
+      body: {
+        url: videoUrl,
+        downloadMode: "auto",
+        videoQuality: "720",
+      },
+      parseResponse: (data: Record<string, unknown>) => {
+        if (data.status === "tunnel" || data.status === "redirect") {
+          return data.url as string;
+        }
+        if (data.status === "picker" && Array.isArray(data.picker) && data.picker.length > 0) {
+          return data.picker[0].url as string;
+        }
+        return null;
+      }
+    },
+    {
+      url: "https://co.wuk.sh/api/json",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+      },
+      body: {
+        url: videoUrl,
+        vCodec: "h264",
+        vQuality: "720",
+        aFormat: "mp3",
+        isAudioOnly: false,
+      },
+      parseResponse: (data: Record<string, unknown>) => {
+        if (data.status === "stream" || data.status === "redirect") {
+          return data.url as string;
+        }
+        if (data.status === "picker" && Array.isArray(data.picker) && data.picker.length > 0) {
+          return data.picker[0].url as string;
+        }
+        if (data.url) {
+          return data.url as string;
+        }
+        return null;
+      }
+    }
+  ];
+
+  let lastError = "";
+
+  for (const endpoint of endpoints) {
+    try {
+      console.log(`Trying: ${endpoint.url}`);
+
+      const response = await fetch(endpoint.url, {
+        method: "POST",
+        headers: endpoint.headers,
+        body: JSON.stringify(endpoint.body),
+      });
+
+      const responseText = await response.text();
+      console.log(`Response from ${endpoint.url}: ${response.status} - ${responseText.substring(0, 500)}`);
+
+      if (response.ok) {
+        try {
+          const data = JSON.parse(responseText);
+          const downloadUrl = endpoint.parseResponse(data);
+          if (downloadUrl) {
+            return { url: downloadUrl, error: "" };
+          }
+          lastError = data.text || data.error?.message || "No download URL returned";
+        } catch {
+          lastError = "Invalid JSON response";
+        }
+      } else {
+        lastError = `HTTP ${response.status}`;
+      }
+    } catch (err) {
+      console.error(`Error with ${endpoint.url}:`, err);
+      lastError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  return { url: null, error: lastError };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -45,68 +134,13 @@ Deno.serve(async (req: Request) => {
 
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
-    const cobaltEndpoints = [
-      "https://co.wuk.sh/api/json",
-      "https://cobalt-api.kwiatekmiki.com/api/json",
-    ];
-
-    let downloadUrl: string | null = null;
-    let lastError = "";
-
-    for (const endpoint of cobaltEndpoints) {
-      try {
-        console.log(`Trying endpoint: ${endpoint}`);
-
-        const cobaltResponse = await fetch(endpoint, {
-          method: "POST",
-          headers: {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            url: videoUrl,
-            vCodec: "h264",
-            vQuality: "720",
-            aFormat: "mp3",
-            isAudioOnly: false,
-            isNoTTWatermark: true,
-            isTTFullAudio: false,
-            disableMetadata: false,
-          }),
-        });
-
-        if (cobaltResponse.ok) {
-          const data = await cobaltResponse.json();
-          console.log(`Response from ${endpoint}:`, JSON.stringify(data));
-
-          if (data.status === "stream" || data.status === "redirect") {
-            downloadUrl = data.url;
-            break;
-          } else if (data.status === "picker" && data.picker && data.picker.length > 0) {
-            downloadUrl = data.picker[0].url;
-            break;
-          } else if (data.url) {
-            downloadUrl = data.url;
-            break;
-          } else {
-            lastError = data.text || "No download URL in response";
-          }
-        } else {
-          const errorText = await cobaltResponse.text();
-          console.error(`Error from ${endpoint}: ${cobaltResponse.status} - ${errorText}`);
-          lastError = `API error: ${cobaltResponse.status}`;
-        }
-      } catch (err) {
-        console.error(`Failed to reach ${endpoint}:`, err);
-        lastError = err instanceof Error ? err.message : String(err);
-      }
-    }
+    const { url: downloadUrl, error: apiError } = await tryGetVideoUrl(videoUrl);
 
     if (!downloadUrl) {
       return new Response(
         JSON.stringify({
           error: "Could not process this video. It might be restricted, private, or too long.",
-          details: lastError,
+          details: apiError,
         }),
         {
           status: 400,
@@ -115,21 +149,20 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    console.log(`Download URL obtained, fetching video...`);
+    console.log(`Download URL obtained: ${downloadUrl.substring(0, 100)}...`);
 
     const videoResponse = await fetch(downloadUrl, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.youtube.com/",
       },
     });
 
     if (!videoResponse.ok) {
-      console.error(`Failed to download video: ${videoResponse.status}`);
+      console.error(`Failed to download: ${videoResponse.status}`);
       return new Response(
-        JSON.stringify({ error: "Failed to download video from source" }),
+        JSON.stringify({ error: "Failed to download video" }),
         {
           status: 500,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -138,13 +171,11 @@ Deno.serve(async (req: Request) => {
     }
 
     const videoBlob = await videoResponse.blob();
-    console.log(`Video downloaded successfully: ${videoBlob.size} bytes`);
+    console.log(`Downloaded: ${videoBlob.size} bytes`);
 
-    if (videoBlob.size < 1000) {
-      const text = await videoBlob.text();
-      console.error(`Received small response, might be error: ${text}`);
+    if (videoBlob.size < 10000) {
       return new Response(
-        JSON.stringify({ error: "Video download failed - received invalid data" }),
+        JSON.stringify({ error: "Video download failed - file too small" }),
         {
           status: 500,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -152,23 +183,21 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const contentType = videoResponse.headers.get("Content-Type") || "video/mp4";
-
     return new Response(videoBlob, {
       status: 200,
       headers: {
         ...corsHeaders,
-        "Content-Type": contentType.includes("video") ? contentType : "video/mp4",
+        "Content-Type": "video/mp4",
         "Content-Disposition": `attachment; filename="youtube-${videoId}.mp4"`,
       },
     });
 
   } catch (error) {
-    console.error("Error processing YouTube video:", error);
+    console.error("Error:", error);
 
     return new Response(
       JSON.stringify({
-        error: "Failed to process YouTube video. Please try again or use a different video.",
+        error: "Failed to process video",
         details: error instanceof Error ? error.message : String(error)
       }),
       {
