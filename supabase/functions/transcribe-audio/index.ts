@@ -10,6 +10,7 @@ interface TranscribeRequest {
   audioBase64: string;
   mimeType: string;
   language?: string;
+  duration?: number;
 }
 
 Deno.serve(async (req: Request) => {
@@ -25,7 +26,7 @@ Deno.serve(async (req: Request) => {
     if (!openRouterApiKey) {
       return new Response(
         JSON.stringify({
-          error: "OpenRouter API key not configured. Please add OPENROUTER_API_KEY to your Supabase Edge Function secrets.",
+          error: "OpenRouter API key not configured",
           success: false
         }),
         {
@@ -35,7 +36,7 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const { audioBase64, mimeType = "audio/wav", language = "auto" }: TranscribeRequest = await req.json();
+    const { audioBase64, mimeType = "audio/wav", language = "auto", duration = 0 }: TranscribeRequest = await req.json();
 
     if (!audioBase64) {
       return new Response(
@@ -47,16 +48,25 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const transcriptionPrompt = `Listen carefully to this audio file and transcribe every word spoken.
+    const transcriptionPrompt = `Transcribe this audio with timestamps. The audio is ${duration > 0 ? duration.toFixed(1) + ' seconds long' : 'a short clip'}.
 
-Requirements:
-- Transcribe ALL speech exactly as spoken
-- Include proper punctuation
-- Detect the language automatically
-- If multiple speakers, use [Speaker 1], [Speaker 2] format
-- If unclear, use [unclear]
-- Return ONLY the transcription, nothing else
-${language !== "auto" ? `- Language: ${language}` : ""}`;
+IMPORTANT: Return the transcription in this EXACT JSON format:
+{
+  "segments": [
+    {"start": 0.0, "end": 2.5, "text": "First sentence or phrase"},
+    {"start": 2.5, "end": 5.0, "text": "Second sentence or phrase"},
+    {"start": 5.0, "end": 7.5, "text": "Third sentence or phrase"}
+  ]
+}
+
+Rules:
+- Break the audio into natural speech segments (2-5 seconds each)
+- Each segment should contain a complete phrase or short sentence
+- Timestamps must be in seconds (decimal format)
+- Start time of next segment should match or follow end time of previous
+- Transcribe exactly what is spoken
+- ${language !== "auto" ? `Language: ${language}` : "Detect language automatically"}
+- Return ONLY valid JSON, no other text`;
 
     const dataUrl = `data:${mimeType};base64,${audioBase64}`;
 
@@ -96,7 +106,6 @@ ${language !== "auto" ? `- Language: ${language}` : ""}`;
 
     if (!response.ok) {
       console.error("OpenRouter API error:", response.status, responseText);
-
       let errorMessage = "Transcription failed";
       try {
         const errorJson = JSON.parse(responseText);
@@ -104,7 +113,6 @@ ${language !== "auto" ? `- Language: ${language}` : ""}`;
       } catch {
         errorMessage = responseText;
       }
-
       return new Response(
         JSON.stringify({ error: errorMessage, success: false, status: response.status }),
         {
@@ -127,9 +135,9 @@ ${language !== "auto" ? `- Language: ${language}` : ""}`;
       );
     }
 
-    const transcription = result.choices?.[0]?.message?.content || "";
+    const content = result.choices?.[0]?.message?.content || "";
 
-    if (!transcription) {
+    if (!content) {
       return new Response(
         JSON.stringify({ error: "No transcription returned from AI", success: false }),
         {
@@ -139,10 +147,32 @@ ${language !== "auto" ? `- Language: ${language}` : ""}`;
       );
     }
 
+    let segments = [];
+    let plainText = content;
+
+    try {
+      const jsonMatch = content.match(/\{[\s\S]*"segments"[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed.segments && Array.isArray(parsed.segments)) {
+          segments = parsed.segments.map((seg: { start: number; end: number; text: string }) => ({
+            start: Number(seg.start) || 0,
+            end: Number(seg.end) || 0,
+            text: String(seg.text || "").trim()
+          })).filter((seg: { text: string }) => seg.text.length > 0);
+          plainText = segments.map((s: { text: string }) => s.text).join(" ");
+        }
+      }
+    } catch (parseError) {
+      console.error("Failed to parse segments:", parseError);
+      plainText = content.replace(/```json|```|\{[\s\S]*\}/g, "").trim();
+    }
+
     return new Response(
       JSON.stringify({
         success: true,
-        transcription: transcription.trim(),
+        transcription: plainText.trim(),
+        segments,
         model: result.model,
         usage: result.usage,
       }),

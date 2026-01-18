@@ -14,7 +14,7 @@ import {
   Wand2,
   Loader2,
 } from 'lucide-react';
-import { transcribeVideoClip } from '../lib/transcriptionService';
+import { transcribeVideoClip, SubtitleSegment } from '../lib/transcriptionService';
 
 interface VideoEditorProps {
   videoBlob: Blob;
@@ -65,6 +65,7 @@ export default function VideoEditor({
   const [videoReady, setVideoReady] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
+  const [subtitleSegments, setSubtitleSegments] = useState<SubtitleSegment[]>([]);
 
   const [subtitle, setSubtitle] = useState<SubtitleStyle>({
     text: '',
@@ -84,6 +85,17 @@ export default function VideoEditor({
     saturation: 100,
     blur: 0,
   });
+
+  const getCurrentSubtitleText = useCallback((time: number): string => {
+    if (subtitleSegments.length === 0) {
+      return subtitle.text;
+    }
+    const relativeTime = time - trimStart;
+    const currentSegment = subtitleSegments.find(
+      seg => relativeTime >= seg.start && relativeTime <= seg.end
+    );
+    return currentSegment?.text || '';
+  }, [subtitleSegments, subtitle.text, trimStart]);
 
   const drawFrame = useCallback(() => {
     const video = videoRef.current;
@@ -105,17 +117,18 @@ export default function VideoEditor({
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     ctx.filter = 'none';
 
-    if (subtitle.text.trim()) {
-      drawSubtitle(ctx, canvas.width, canvas.height);
+    const currentText = getCurrentSubtitleText(video.currentTime);
+    if (currentText.trim()) {
+      drawSubtitle(ctx, canvas.width, canvas.height, currentText);
     }
-  }, [effects, subtitle]);
+  }, [effects, subtitle, subtitleSegments, trimStart, getCurrentSubtitleText]);
 
-  const drawSubtitle = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
+  const drawSubtitle = (ctx: CanvasRenderingContext2D, width: number, height: number, text: string) => {
     ctx.font = `${subtitle.fontWeight} ${subtitle.fontSize}px ${subtitle.fontFamily}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    const lines = subtitle.text.split('\n');
+    const lines = text.split('\n');
     const lineHeight = subtitle.fontSize * 1.3;
     const totalHeight = lines.length * lineHeight;
 
@@ -289,6 +302,11 @@ export default function VideoEditor({
 
       if (result.success && result.transcription) {
         setSubtitle(prev => ({ ...prev, text: result.transcription }));
+        if (result.segments && result.segments.length > 0) {
+          setSubtitleSegments(result.segments);
+        } else {
+          setSubtitleSegments([]);
+        }
       } else {
         setTranscriptionError(result.error || 'Transcription failed');
       }
@@ -396,9 +414,8 @@ export default function VideoEditor({
             exportCtx.drawImage(clonedVideo, 0, 0, exportCanvas.width, exportCanvas.height);
             exportCtx.filter = 'none';
 
-            if (subtitle.text.trim()) {
-              drawSubtitleToContext(exportCtx, exportCanvas.width, exportCanvas.height);
-            }
+            const currentText = getCurrentSubtitleText(clonedVideo.currentTime);
+            drawSubtitleToContext(exportCtx, exportCanvas.width, exportCanvas.height, currentText);
 
             requestAnimationFrame(drawExportFrame);
           };
@@ -414,12 +431,14 @@ export default function VideoEditor({
     }
   };
 
-  const drawSubtitleToContext = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
+  const drawSubtitleToContext = (ctx: CanvasRenderingContext2D, width: number, height: number, text: string) => {
+    if (!text.trim()) return;
+
     ctx.font = `${subtitle.fontWeight} ${subtitle.fontSize}px ${subtitle.fontFamily}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    const lines = subtitle.text.split('\n');
+    const lines = text.split('\n');
     const lineHeight = subtitle.fontSize * 1.3;
     const totalHeight = lines.length * lineHeight;
 
@@ -471,6 +490,7 @@ export default function VideoEditor({
       setIsPlaying(false);
 
       const hasEdits = subtitle.text.trim() ||
+        subtitleSegments.length > 0 ||
         effects.brightness !== 100 ||
         effects.contrast !== 100 ||
         effects.saturation !== 100 ||
@@ -727,22 +747,46 @@ export default function VideoEditor({
                     </div>
                   )}
 
+                  {subtitleSegments.length > 0 && (
+                    <div className="p-3 bg-green-900/50 border border-green-700 rounded-lg">
+                      <div className="flex items-center justify-between">
+                        <span className="text-green-300 text-sm">
+                          Timed subtitles active ({subtitleSegments.length} segments)
+                        </span>
+                        <button
+                          onClick={() => setSubtitleSegments([])}
+                          className="text-xs text-green-400 hover:text-green-300 underline"
+                        >
+                          Switch to static
+                        </button>
+                      </div>
+                      <p className="text-xs text-green-400/70 mt-1">
+                        Subtitles will appear word-by-word during playback
+                      </p>
+                    </div>
+                  )}
+
                   <div>
                     <label className="block text-sm font-medium text-gray-300 mb-2">
-                      Subtitle Text
+                      {subtitleSegments.length > 0 ? 'Full Transcript (read-only)' : 'Subtitle Text'}
                     </label>
                     <textarea
                       value={subtitle.text}
-                      onChange={(e) =>
-                        setSubtitle({ ...subtitle, text: e.target.value })
-                      }
+                      onChange={(e) => {
+                        setSubtitle({ ...subtitle, text: e.target.value });
+                        if (subtitleSegments.length > 0) {
+                          setSubtitleSegments([]);
+                        }
+                      }}
                       placeholder={isTranscribing ? "Transcribing audio..." : "Click 'Auto-Transcribe' or enter text manually..."}
                       className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white resize-none focus:outline-none focus:border-blue-500"
                       rows={4}
                       disabled={isTranscribing}
                     />
                     <p className="text-xs text-gray-500 mt-1">
-                      You can edit the transcription to fix any errors
+                      {subtitleSegments.length > 0
+                        ? 'Edit the text to switch to static subtitle mode'
+                        : 'You can edit the transcription to fix any errors'}
                     </p>
                   </div>
 

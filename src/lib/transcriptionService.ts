@@ -1,13 +1,20 @@
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
+export interface SubtitleSegment {
+  start: number;
+  end: number;
+  text: string;
+}
+
 export interface TranscriptionResult {
   success: boolean;
   transcription: string;
+  segments: SubtitleSegment[];
   error?: string;
 }
 
-export async function extractAudioFromVideo(videoBlob: Blob): Promise<Blob> {
+export async function extractAudioFromVideo(videoBlob: Blob): Promise<{ audio: Blob; duration: number }> {
   return new Promise((resolve, reject) => {
     const video = document.createElement('video');
     const videoUrl = URL.createObjectURL(videoBlob);
@@ -38,7 +45,7 @@ export async function extractAudioFromVideo(videoBlob: Blob): Promise<Blob> {
 
         URL.revokeObjectURL(videoUrl);
         audioContext.close();
-        resolve(wavBlob);
+        resolve({ audio: wavBlob, duration });
       } catch (error) {
         URL.revokeObjectURL(videoUrl);
         reject(error);
@@ -107,7 +114,8 @@ function writeString(view: DataView, offset: number, string: string) {
 
 export async function transcribeAudio(
   audioBlob: Blob,
-  language: string = 'auto'
+  language: string = 'auto',
+  duration: number = 0
 ): Promise<TranscriptionResult> {
   try {
     const base64 = await blobToBase64(audioBlob);
@@ -123,6 +131,7 @@ export async function transcribeAudio(
         audioBase64: base64Data,
         mimeType: audioBlob.type || 'audio/wav',
         language,
+        duration,
       }),
     });
 
@@ -132,6 +141,7 @@ export async function transcribeAudio(
       return {
         success: false,
         transcription: '',
+        segments: [],
         error: result.error || 'Transcription failed',
       };
     }
@@ -139,12 +149,14 @@ export async function transcribeAudio(
     return {
       success: true,
       transcription: result.transcription,
+      segments: result.segments || [],
     };
   } catch (error) {
     console.error('Transcription error:', error);
     return {
       success: false,
       transcription: '',
+      segments: [],
       error: String(error),
     };
   }
@@ -155,13 +167,14 @@ export async function transcribeVideoClip(
   language: string = 'auto'
 ): Promise<TranscriptionResult> {
   try {
-    const audioBlob = await extractAudioFromVideo(videoBlob);
-    return await transcribeAudio(audioBlob, language);
+    const { audio, duration } = await extractAudioFromVideo(videoBlob);
+    return await transcribeAudio(audio, language, duration);
   } catch (error) {
     console.error('Failed to extract audio:', error);
     return {
       success: false,
       transcription: '',
+      segments: [],
       error: 'Failed to extract audio from video',
     };
   }
