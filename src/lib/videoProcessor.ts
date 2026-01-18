@@ -224,13 +224,6 @@ export class VideoProcessor {
 
           extractCtx.filter = 'none';
 
-          if (options.useSubtitles && options.subtitleStyle) {
-            const subtitleText = clip.isViralMoment
-              ? `Viral Moment ${clip.index + 1}`
-              : `Clip ${clip.index + 1}`;
-            this.drawSubtitleToContext(extractCtx, extractCanvas, subtitleText, options.subtitleStyle);
-          }
-
           const elapsed = performance.now() - startTime;
           const progress = Math.min(100, (elapsed / clipDurationMs) * 100);
           if (progress - lastProgress >= 1 && onProgress) {

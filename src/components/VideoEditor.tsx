@@ -11,7 +11,10 @@ import {
   Video,
   Volume2,
   VolumeX,
+  Wand2,
+  Loader2,
 } from 'lucide-react';
+import { transcribeVideoClip } from '../lib/transcriptionService';
 
 interface VideoEditorProps {
   videoBlob: Blob;
@@ -60,6 +63,8 @@ export default function VideoEditor({
   const [activeTab, setActiveTab] = useState<'subtitle' | 'effects' | 'trim'>('subtitle');
   const [isProcessing, setIsProcessing] = useState(false);
   const [videoReady, setVideoReady] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
 
   const [subtitle, setSubtitle] = useState<SubtitleStyle>({
     text: '',
@@ -273,6 +278,26 @@ export default function VideoEditor({
     video.currentTime = trimStart;
     video.pause();
     setIsPlaying(false);
+  };
+
+  const handleAutoTranscribe = async () => {
+    setIsTranscribing(true);
+    setTranscriptionError(null);
+
+    try {
+      const result = await transcribeVideoClip(videoBlob);
+
+      if (result.success && result.transcription) {
+        setSubtitle(prev => ({ ...prev, text: result.transcription }));
+      } else {
+        setTranscriptionError(result.error || 'Transcription failed');
+      }
+    } catch (error) {
+      setTranscriptionError('Failed to transcribe video');
+      console.error('Transcription error:', error);
+    } finally {
+      setIsTranscribing(false);
+    }
   };
 
   const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -678,6 +703,30 @@ export default function VideoEditor({
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
               {activeTab === 'subtitle' && (
                 <>
+                  <button
+                    onClick={handleAutoTranscribe}
+                    disabled={isTranscribing || isProcessing}
+                    className="w-full py-3 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 disabled:from-gray-600 disabled:to-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold text-white flex items-center justify-center gap-2 transition-all"
+                  >
+                    {isTranscribing ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        Transcribing with AI...
+                      </>
+                    ) : (
+                      <>
+                        <Wand2 className="w-5 h-5" />
+                        Auto-Transcribe with AI
+                      </>
+                    )}
+                  </button>
+
+                  {transcriptionError && (
+                    <div className="p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm">
+                      {transcriptionError}
+                    </div>
+                  )}
+
                   <div>
                     <label className="block text-sm font-medium text-gray-300 mb-2">
                       Subtitle Text
@@ -687,10 +736,14 @@ export default function VideoEditor({
                       onChange={(e) =>
                         setSubtitle({ ...subtitle, text: e.target.value })
                       }
-                      placeholder="Enter your subtitle text here..."
+                      placeholder={isTranscribing ? "Transcribing audio..." : "Click 'Auto-Transcribe' or enter text manually..."}
                       className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white resize-none focus:outline-none focus:border-blue-500"
-                      rows={3}
+                      rows={4}
+                      disabled={isTranscribing}
                     />
+                    <p className="text-xs text-gray-500 mt-1">
+                      You can edit the transcription to fix any errors
+                    </p>
                   </div>
 
                   <div>

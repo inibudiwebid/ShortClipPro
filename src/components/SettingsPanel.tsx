@@ -1,18 +1,12 @@
-import { Settings, Film, Type, Sparkles, Zap, Users } from 'lucide-react';
-import { SubtitleStyle } from '../lib/supabase';
+import { Settings, Film, Type, Zap, Users } from 'lucide-react';
 
 interface SettingsPanelProps {
   clipCount: number;
   clipDuration: number;
-  useSubtitles: boolean;
-  selectedStyleId: string;
-  subtitleStyles: SubtitleStyle[];
   useViralDetection: boolean;
   useSplitScreen: boolean;
   onClipCountChange: (count: number) => void;
   onClipDurationChange: (duration: number) => void;
-  onUseSubtitlesChange: (use: boolean) => void;
-  onStyleChange: (styleId: string) => void;
   onViralDetectionChange: (use: boolean) => void;
   onSplitScreenChange: (use: boolean) => void;
 }
@@ -20,15 +14,10 @@ interface SettingsPanelProps {
 export function SettingsPanel({
   clipCount,
   clipDuration,
-  useSubtitles,
-  selectedStyleId,
-  subtitleStyles,
   useViralDetection,
   useSplitScreen,
   onClipCountChange,
   onClipDurationChange,
-  onUseSubtitlesChange,
-  onStyleChange,
   onViralDetectionChange,
   onSplitScreenChange,
 }: SettingsPanelProps) {
@@ -109,61 +98,20 @@ export function SettingsPanel({
             Dynamic focus on active speaker in 2-person interviews
           </p>
 
-          <label className="flex items-center gap-3 cursor-pointer group">
-            <input
-              type="checkbox"
-              checked={useSubtitles}
-              onChange={(e) => onUseSubtitlesChange(e.target.checked)}
-              className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-            />
-            <div className="flex items-center gap-2">
-              <Type className="w-5 h-5 text-blue-500 group-hover:text-blue-600 transition-colors" />
-              <span className="text-sm font-medium text-gray-700 group-hover:text-gray-900">
-                Enable Subtitles
-              </span>
+          <div className="flex items-center gap-3 group">
+            <div className="w-5 h-5 flex items-center justify-center">
+              <Type className="w-5 h-5 text-blue-500" />
             </div>
-          </label>
-        </div>
-
-        {useSubtitles && (
-          <div className="space-y-3 animate-in fade-in slide-in-from-top-2">
-            <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
-              <Sparkles className="w-5 h-5 text-yellow-500" />
-              Subtitle Style
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              {subtitleStyles.map((style) => (
-                <button
-                  key={style.id}
-                  onClick={() => onStyleChange(style.id)}
-                  className={`relative p-4 border-2 rounded-lg text-left transition-all hover:scale-105 ${
-                    selectedStyleId === style.id
-                      ? 'border-blue-500 bg-blue-50 shadow-md'
-                      : 'border-gray-200 hover:border-blue-300 bg-white'
-                  }`}
-                >
-                  <div className="font-semibold text-sm text-gray-800 mb-1">
-                    {style.name}
-                  </div>
-                  <div
-                    className="text-xs px-2 py-1 rounded inline-block"
-                    style={{
-                      backgroundColor: style.config.backgroundColor || '#000',
-                      color: style.config.color || '#fff',
-                      fontFamily: style.config.fontFamily,
-                      opacity: 0.9,
-                    }}
-                  >
-                    Preview
-                  </div>
-                  {selectedStyleId === style.id && (
-                    <div className="absolute top-2 right-2 w-3 h-3 bg-blue-500 rounded-full"></div>
-                  )}
-                </button>
-              ))}
+            <div>
+              <span className="text-sm font-medium text-gray-700">
+                AI Auto-Transcription
+              </span>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Available in video editor for each clip
+              </p>
             </div>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

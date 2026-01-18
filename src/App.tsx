@@ -1,11 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { VideoUploader } from './components/VideoUploader';
 import { SettingsPanel } from './components/SettingsPanel';
 import { ProcessingPanel } from './components/ProcessingPanel';
 import { VideoProcessor } from './lib/videoProcessor';
 import { ViralMomentDetector } from './lib/viralMomentDetector';
 import { SplitScreenProcessor } from './lib/splitScreenProcessor';
-import { supabase, SubtitleStyle } from './lib/supabase';
 import { Scissors, Play } from 'lucide-react';
 
 interface Clip {
@@ -20,35 +19,12 @@ function App() {
   const [videoDuration, setVideoDuration] = useState<number>(0);
   const [clipCount, setClipCount] = useState<number>(5);
   const [clipDuration, setClipDuration] = useState<number>(15);
-  const [useSubtitles, setUseSubtitles] = useState<boolean>(true);
   const [useViralDetection, setUseViralDetection] = useState<boolean>(false);
   const [useSplitScreen, setUseSplitScreen] = useState<boolean>(false);
-  const [subtitleStyles, setSubtitleStyles] = useState<SubtitleStyle[]>([]);
-  const [selectedStyleId, setSelectedStyleId] = useState<string>('');
   const [clips, setClips] = useState<Clip[]>([]);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [processor] = useState(() => new VideoProcessor());
-
-  useEffect(() => {
-    loadSubtitleStyles();
-  }, []);
-
-  const loadSubtitleStyles = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('subtitle_styles')
-        .select('*')
-        .order('is_default', { ascending: false });
-
-      if (!error && data && data.length > 0) {
-        setSubtitleStyles(data);
-        setSelectedStyleId(data[0].id);
-      }
-    } catch (err) {
-      console.error('Failed to load subtitle styles:', err);
-    }
-  };
 
   const handleVideoUpload = async (file: File) => {
     setVideoFile(file);
@@ -67,8 +43,6 @@ function App() {
 
     setIsProcessing(true);
     setIsAnalyzing(true);
-
-    const selectedStyle = subtitleStyles.find((s) => s.id === selectedStyleId);
 
     let viralMoments;
     let viralVideoUrl: string | null = null;
@@ -122,8 +96,7 @@ function App() {
       {
         clipCount,
         clipDuration,
-        useSubtitles,
-        subtitleStyle: selectedStyle,
+        useSubtitles: false,
         videoEffects: [],
         transitions: [],
         useViralDetection,
@@ -154,8 +127,7 @@ function App() {
           {
             clipCount,
             clipDuration,
-            useSubtitles,
-            subtitleStyle: selectedStyle,
+            useSubtitles: false,
             videoEffects: [],
             transitions: [],
             useViralDetection,
@@ -292,7 +264,6 @@ function App() {
                 </button>
                 <p className="text-xs text-gray-500 text-center mt-3">
                   This will create {clipCount} clips of {clipDuration} seconds each
-                  {useSubtitles && ' with professional subtitles'}
                   {useViralDetection && ' focusing on viral moments'}
                   {useSplitScreen && ' with split-screen for interviews'}
                 </p>
@@ -318,15 +289,10 @@ function App() {
               <SettingsPanel
                 clipCount={clipCount}
                 clipDuration={clipDuration}
-                useSubtitles={useSubtitles}
-                selectedStyleId={selectedStyleId}
-                subtitleStyles={subtitleStyles}
                 useViralDetection={useViralDetection}
                 useSplitScreen={useSplitScreen}
                 onClipCountChange={setClipCount}
                 onClipDurationChange={setClipDuration}
-                onUseSubtitlesChange={setUseSubtitles}
-                onStyleChange={setSelectedStyleId}
                 onViralDetectionChange={setUseViralDetection}
                 onSplitScreenChange={setUseSplitScreen}
               />
