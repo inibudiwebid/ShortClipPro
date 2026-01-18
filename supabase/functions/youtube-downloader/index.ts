@@ -10,13 +10,6 @@ interface RequestBody {
   videoId: string;
 }
 
-interface CobaltResponse {
-  status: string;
-  url?: string;
-  picker?: Array<{ url: string; type: string }>;
-  error?: string;
-}
-
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -52,67 +45,71 @@ Deno.serve(async (req: Request) => {
 
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
-    const cobaltResponse = await fetch("https://api.cobalt.tools/", {
-      method: "POST",
-      headers: {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        url: videoUrl,
-        downloadMode: "auto",
-        videoQuality: "720",
-        youtubeVideoCodec: "h264",
-      }),
-    });
+    const cobaltEndpoints = [
+      "https://co.wuk.sh/api/json",
+      "https://cobalt-api.kwiatekmiki.com/api/json",
+    ];
 
-    if (!cobaltResponse.ok) {
-      console.error(`Cobalt API error: ${cobaltResponse.status}`);
+    let downloadUrl: string | null = null;
+    let lastError = "";
 
-      const errorText = await cobaltResponse.text();
-      console.error(`Cobalt error details: ${errorText}`);
+    for (const endpoint of cobaltEndpoints) {
+      try {
+        console.log(`Trying endpoint: ${endpoint}`);
 
-      return new Response(
-        JSON.stringify({
-          error: "Failed to process video. The video might be restricted, private, or unavailable.",
-          details: `API returned status ${cobaltResponse.status}`
-        }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        const cobaltResponse = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            url: videoUrl,
+            vCodec: "h264",
+            vQuality: "720",
+            aFormat: "mp3",
+            isAudioOnly: false,
+            isNoTTWatermark: true,
+            isTTFullAudio: false,
+            disableMetadata: false,
+          }),
+        });
+
+        if (cobaltResponse.ok) {
+          const data = await cobaltResponse.json();
+          console.log(`Response from ${endpoint}:`, JSON.stringify(data));
+
+          if (data.status === "stream" || data.status === "redirect") {
+            downloadUrl = data.url;
+            break;
+          } else if (data.status === "picker" && data.picker && data.picker.length > 0) {
+            downloadUrl = data.picker[0].url;
+            break;
+          } else if (data.url) {
+            downloadUrl = data.url;
+            break;
+          } else {
+            lastError = data.text || "No download URL in response";
+          }
+        } else {
+          const errorText = await cobaltResponse.text();
+          console.error(`Error from ${endpoint}: ${cobaltResponse.status} - ${errorText}`);
+          lastError = `API error: ${cobaltResponse.status}`;
         }
-      );
-    }
-
-    const cobaltData: CobaltResponse = await cobaltResponse.json();
-    console.log(`Cobalt response status: ${cobaltData.status}`);
-
-    if (cobaltData.status === "error") {
-      return new Response(
-        JSON.stringify({
-          error: cobaltData.error || "Failed to process video",
-        }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
-      );
-    }
-
-    let downloadUrl = cobaltData.url;
-
-    if (!downloadUrl && cobaltData.picker && cobaltData.picker.length > 0) {
-      const videoItem = cobaltData.picker.find(item => item.type === "video") || cobaltData.picker[0];
-      downloadUrl = videoItem.url;
+      } catch (err) {
+        console.error(`Failed to reach ${endpoint}:`, err);
+        lastError = err instanceof Error ? err.message : String(err);
+      }
     }
 
     if (!downloadUrl) {
       return new Response(
         JSON.stringify({
-          error: "No download URL available for this video",
+          error: "Could not process this video. It might be restricted, private, or too long.",
+          details: lastError,
         }),
         {
-          status: 404,
+          status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         }
       );
@@ -123,6 +120,9 @@ Deno.serve(async (req: Request) => {
     const videoResponse = await fetch(downloadUrl, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.youtube.com/",
       },
     });
 
@@ -140,13 +140,25 @@ Deno.serve(async (req: Request) => {
     const videoBlob = await videoResponse.blob();
     console.log(`Video downloaded successfully: ${videoBlob.size} bytes`);
 
+    if (videoBlob.size < 1000) {
+      const text = await videoBlob.text();
+      console.error(`Received small response, might be error: ${text}`);
+      return new Response(
+        JSON.stringify({ error: "Video download failed - received invalid data" }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
     const contentType = videoResponse.headers.get("Content-Type") || "video/mp4";
 
     return new Response(videoBlob, {
       status: 200,
       headers: {
         ...corsHeaders,
-        "Content-Type": contentType,
+        "Content-Type": contentType.includes("video") ? contentType : "video/mp4",
         "Content-Disposition": `attachment; filename="youtube-${videoId}.mp4"`,
       },
     });
