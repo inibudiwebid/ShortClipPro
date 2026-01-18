@@ -1,7 +1,4 @@
 {
-  "imports": {
-    "@distube/ytdl-core": "npm:@distube/ytdl-core@4.14.4"
-  },
   "compilerOptions": {
     "strict": true,
     "noImplicitAny": false,

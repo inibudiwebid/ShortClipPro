@@ -1,4 +1,4 @@
-import ytdl from "npm:@distube/ytdl-core@4.14.4";
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -10,17 +10,11 @@ interface RequestBody {
   videoId: string;
 }
 
-interface VideoFormat {
-  url: string;
-  container: string;
-  qualityLabel: string;
-  hasVideo: boolean;
-  hasAudio: boolean;
-}
-
-// Declare Deno global for TypeScript
-declare global {
-  var Deno: any;
+interface CobaltResponse {
+  status: string;
+  url?: string;
+  picker?: Array<{ url: string; type: string }>;
+  error?: string;
 }
 
 Deno.serve(async (req: Request) => {
@@ -58,49 +52,64 @@ Deno.serve(async (req: Request) => {
 
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
-    // Get video info with retry logic
-    let info;
-    let retryCount = 0;
-    const maxRetries = 3;
-
-    while (retryCount < maxRetries) {
-      try {
-        info = await ytdl.getInfo(videoUrl);
-        break;
-      } catch (error) {
-        retryCount++;
-        if (retryCount >= maxRetries) {
-          throw error;
-        }
-        // Wait before retry
-        await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
-      }
-    }
-
-    if (!info) {
-      throw new Error("Failed to get video information after retries");
-    }
-
-    console.log(`Video info retrieved: ${info.videoDetails.title}`);
-
-    // Try to find the best format with both video and audio
-    let format = ytdl.chooseFormat(info.formats, {
-      quality: 'highestvideo',
-      filter: (format: VideoFormat) => format.hasVideo && format.hasAudio
+    const cobaltResponse = await fetch("https://api.cobalt.tools/", {
+      method: "POST",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        url: videoUrl,
+        downloadMode: "auto",
+        videoQuality: "720",
+        youtubeVideoCodec: "h264",
+      }),
     });
 
-    // If no format with both video and audio, try video only
-    if (!format || !format.url) {
-      format = ytdl.chooseFormat(info.formats, {
-        quality: 'highestvideo',
-        filter: (format: VideoFormat) => format.hasVideo
-      });
-    }
+    if (!cobaltResponse.ok) {
+      console.error(`Cobalt API error: ${cobaltResponse.status}`);
 
-    if (!format || !format.url) {
+      const errorText = await cobaltResponse.text();
+      console.error(`Cobalt error details: ${errorText}`);
+
       return new Response(
         JSON.stringify({
-          error: "No suitable video format found. Please try a different video."
+          error: "Failed to process video. The video might be restricted, private, or unavailable.",
+          details: `API returned status ${cobaltResponse.status}`
+        }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    const cobaltData: CobaltResponse = await cobaltResponse.json();
+    console.log(`Cobalt response status: ${cobaltData.status}`);
+
+    if (cobaltData.status === "error") {
+      return new Response(
+        JSON.stringify({
+          error: cobaltData.error || "Failed to process video",
+        }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    let downloadUrl = cobaltData.url;
+
+    if (!downloadUrl && cobaltData.picker && cobaltData.picker.length > 0) {
+      const videoItem = cobaltData.picker.find(item => item.type === "video") || cobaltData.picker[0];
+      downloadUrl = videoItem.url;
+    }
+
+    if (!downloadUrl) {
+      return new Response(
+        JSON.stringify({
+          error: "No download URL available for this video",
         }),
         {
           status: 404,
@@ -109,15 +118,18 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    console.log(`Selected format: ${format.container}, quality: ${format.qualityLabel}`);
+    console.log(`Download URL obtained, fetching video...`);
 
-    // Download video
-    const videoResponse = await fetch(format.url);
+    const videoResponse = await fetch(downloadUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+    });
 
     if (!videoResponse.ok) {
-      console.error(`Failed to download video: ${videoResponse.status} ${videoResponse.statusText}`);
+      console.error(`Failed to download video: ${videoResponse.status}`);
       return new Response(
-        JSON.stringify({ error: "Failed to download video from YouTube" }),
+        JSON.stringify({ error: "Failed to download video from source" }),
         {
           status: 500,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -128,12 +140,14 @@ Deno.serve(async (req: Request) => {
     const videoBlob = await videoResponse.blob();
     console.log(`Video downloaded successfully: ${videoBlob.size} bytes`);
 
+    const contentType = videoResponse.headers.get("Content-Type") || "video/mp4";
+
     return new Response(videoBlob, {
       status: 200,
       headers: {
         ...corsHeaders,
-        "Content-Type": `video/${format.container}`,
-        "Content-Disposition": `attachment; filename="youtube-${videoId}.${format.container}"`,
+        "Content-Type": contentType,
+        "Content-Disposition": `attachment; filename="youtube-${videoId}.mp4"`,
       },
     });
 
@@ -142,7 +156,7 @@ Deno.serve(async (req: Request) => {
 
     return new Response(
       JSON.stringify({
-        error: "Failed to process YouTube video. The video might be restricted, private, or unavailable.",
+        error: "Failed to process YouTube video. Please try again or use a different video.",
         details: error instanceof Error ? error.message : String(error)
       }),
       {
