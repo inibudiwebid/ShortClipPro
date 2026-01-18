@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   X,
   Play,
@@ -9,6 +9,8 @@ import {
   Sliders,
   Scissors,
   Video,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 
 interface VideoEditorProps {
@@ -30,6 +32,13 @@ interface SubtitleStyle {
   strokeWidth: number;
 }
 
+interface Effects {
+  brightness: number;
+  contrast: number;
+  saturation: number;
+  blur: number;
+}
+
 export default function VideoEditor({
   videoBlob,
   clipIndex,
@@ -39,17 +48,21 @@ export default function VideoEditor({
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
-  const animationFrameRef = useRef<number>();
+  const animationFrameRef = useRef<number | null>(null);
+  const videoUrlRef = useRef<string | null>(null);
+
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
   const [activeTab, setActiveTab] = useState<'subtitle' | 'effects' | 'trim'>('subtitle');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [videoReady, setVideoReady] = useState(false);
 
   const [subtitle, setSubtitle] = useState<SubtitleStyle>({
-    text: 'Add your subtitle here',
+    text: '',
     fontFamily: 'Arial',
     fontSize: 48,
     fontWeight: 'bold',
@@ -60,39 +73,14 @@ export default function VideoEditor({
     strokeWidth: 2,
   });
 
-  const [effects, setEffects] = useState({
+  const [effects, setEffects] = useState<Effects>({
     brightness: 100,
     contrast: 100,
     saturation: 100,
     blur: 0,
   });
 
-  useEffect(() => {
-    if (videoRef.current) {
-      const url = URL.createObjectURL(videoBlob);
-      videoRef.current.src = url;
-      videoRef.current.muted = true;
-
-      videoRef.current.onloadedmetadata = () => {
-        if (videoRef.current) {
-          const dur = videoRef.current.duration;
-          setDuration(dur);
-          setTrimStart(0);
-          setTrimEnd(dur);
-          drawPreview();
-        }
-      };
-
-      return () => {
-        URL.revokeObjectURL(url);
-        if (animationFrameRef.current) {
-          cancelAnimationFrame(animationFrameRef.current);
-        }
-      };
-    }
-  }, [videoBlob]);
-
-  const drawPreview = () => {
+  const drawFrame = useCallback(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas || video.readyState < 2) return;
@@ -100,121 +88,197 @@ export default function VideoEditor({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    canvas.width = video.videoWidth || 1080;
-    canvas.height = video.videoHeight || 1920;
+    const videoWidth = video.videoWidth || 1080;
+    const videoHeight = video.videoHeight || 1920;
+
+    if (canvas.width !== videoWidth || canvas.height !== videoHeight) {
+      canvas.width = videoWidth;
+      canvas.height = videoHeight;
+    }
 
     ctx.filter = `brightness(${effects.brightness}%) contrast(${effects.contrast}%) saturate(${effects.saturation}%) blur(${effects.blur}px)`;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     ctx.filter = 'none';
 
     if (subtitle.text.trim()) {
-      ctx.font = `${subtitle.fontWeight} ${subtitle.fontSize}px ${subtitle.fontFamily}`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
+      drawSubtitle(ctx, canvas.width, canvas.height);
+    }
+  }, [effects, subtitle]);
 
-      const lines = subtitle.text.split('\n');
-      const lineHeight = subtitle.fontSize * 1.3;
-      const totalHeight = lines.length * lineHeight;
+  const drawSubtitle = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
+    ctx.font = `${subtitle.fontWeight} ${subtitle.fontSize}px ${subtitle.fontFamily}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
 
-      let yPosition: number;
-      if (subtitle.position === 'top') {
-        yPosition = canvas.height * 0.15;
-      } else if (subtitle.position === 'center') {
-        yPosition = canvas.height / 2 - totalHeight / 2 + lineHeight / 2;
-      } else {
-        yPosition = canvas.height * 0.85 - totalHeight / 2;
+    const lines = subtitle.text.split('\n');
+    const lineHeight = subtitle.fontSize * 1.3;
+    const totalHeight = lines.length * lineHeight;
+
+    let yPosition: number;
+    if (subtitle.position === 'top') {
+      yPosition = height * 0.15;
+    } else if (subtitle.position === 'center') {
+      yPosition = height / 2 - totalHeight / 2 + lineHeight / 2;
+    } else {
+      yPosition = height * 0.85 - totalHeight / 2;
+    }
+
+    lines.forEach((line, index) => {
+      const y = yPosition + index * lineHeight;
+      const x = width / 2;
+
+      const metrics = ctx.measureText(line);
+      const padding = 20;
+      const bgX = x - metrics.width / 2 - padding;
+      const bgY = y - subtitle.fontSize / 2 - padding / 2;
+      const bgWidth = metrics.width + padding * 2;
+      const bgHeight = subtitle.fontSize + padding;
+
+      ctx.fillStyle = subtitle.backgroundColor;
+      ctx.fillRect(bgX, bgY, bgWidth, bgHeight);
+
+      if (subtitle.strokeWidth > 0) {
+        ctx.strokeStyle = subtitle.strokeColor;
+        ctx.lineWidth = subtitle.strokeWidth;
+        ctx.strokeText(line, x, y);
       }
 
-      lines.forEach((line, index) => {
-        const y = yPosition + index * lineHeight;
-        const x = canvas.width / 2;
-
-        const metrics = ctx.measureText(line);
-        const padding = 20;
-        const bgX = x - metrics.width / 2 - padding;
-        const bgY = y - subtitle.fontSize / 2 - padding / 2;
-        const bgWidth = metrics.width + padding * 2;
-        const bgHeight = subtitle.fontSize + padding;
-
-        ctx.fillStyle = subtitle.backgroundColor;
-        ctx.fillRect(bgX, bgY, bgWidth, bgHeight);
-
-        if (subtitle.strokeWidth > 0) {
-          ctx.strokeStyle = subtitle.strokeColor;
-          ctx.lineWidth = subtitle.strokeWidth;
-          ctx.strokeText(line, x, y);
-        }
-
-        ctx.fillStyle = subtitle.color;
-        ctx.fillText(line, x, y);
-      });
-    }
+      ctx.fillStyle = subtitle.color;
+      ctx.fillText(line, x, y);
+    });
   };
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    const updateTime = () => {
-      setCurrentTime(video.currentTime);
+    videoUrlRef.current = URL.createObjectURL(videoBlob);
+    video.src = videoUrlRef.current;
+    video.load();
 
+    const handleLoadedMetadata = () => {
+      const dur = video.duration;
+      setDuration(dur);
+      setTrimStart(0);
+      setTrimEnd(dur);
+      setVideoReady(true);
+      drawFrame();
+    };
+
+    const handleTimeUpdate = () => {
+      setCurrentTime(video.currentTime);
       if (video.currentTime >= trimEnd && isPlaying) {
-        video.currentTime = trimStart;
         video.pause();
+        video.currentTime = trimStart;
         setIsPlaying(false);
       }
     };
 
-    video.addEventListener('timeupdate', updateTime);
-    return () => video.removeEventListener('timeupdate', updateTime);
-  }, [trimStart, trimEnd, isPlaying]);
-
-  useEffect(() => {
-    const renderLoop = () => {
-      drawPreview();
-      animationFrameRef.current = requestAnimationFrame(renderLoop);
+    const handleEnded = () => {
+      setIsPlaying(false);
+      video.currentTime = trimStart;
     };
 
-    renderLoop();
+    video.addEventListener('loadedmetadata', handleLoadedMetadata);
+    video.addEventListener('timeupdate', handleTimeUpdate);
+    video.addEventListener('ended', handleEnded);
 
     return () => {
+      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      video.removeEventListener('timeupdate', handleTimeUpdate);
+      video.removeEventListener('ended', handleEnded);
+      if (videoUrlRef.current) {
+        URL.revokeObjectURL(videoUrlRef.current);
+      }
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [subtitle, effects]);
+  }, [videoBlob]);
 
-  const togglePlayPause = () => {
-    if (!videoRef.current) return;
+  useEffect(() => {
+    let running = true;
+
+    const renderLoop = () => {
+      if (!running) return;
+      drawFrame();
+      animationFrameRef.current = requestAnimationFrame(renderLoop);
+    };
+
+    if (videoReady) {
+      renderLoop();
+    }
+
+    return () => {
+      running = false;
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, [videoReady, drawFrame]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const checkTrimBounds = () => {
+      if (video.currentTime >= trimEnd) {
+        video.pause();
+        video.currentTime = trimStart;
+        setIsPlaying(false);
+      }
+    };
+
+    video.addEventListener('timeupdate', checkTrimBounds);
+    return () => video.removeEventListener('timeupdate', checkTrimBounds);
+  }, [trimStart, trimEnd]);
+
+  const togglePlayPause = async () => {
+    const video = videoRef.current;
+    if (!video) return;
 
     if (isPlaying) {
-      videoRef.current.pause();
+      video.pause();
       setIsPlaying(false);
     } else {
-      if (videoRef.current.currentTime >= trimEnd) {
-        videoRef.current.currentTime = trimStart;
+      if (video.currentTime >= trimEnd || video.currentTime < trimStart) {
+        video.currentTime = trimStart;
       }
-      videoRef.current.play();
-      setIsPlaying(true);
+      try {
+        await video.play();
+        setIsPlaying(true);
+      } catch (err) {
+        console.error('Failed to play video:', err);
+      }
     }
   };
 
+  const toggleMute = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = !video.muted;
+    setIsMuted(video.muted);
+  };
+
   const resetVideo = () => {
-    if (!videoRef.current) return;
-    videoRef.current.currentTime = trimStart;
-    videoRef.current.pause();
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = trimStart;
+    video.pause();
     setIsPlaying(false);
   };
 
   const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!videoRef.current || !timelineRef.current) return;
+    const video = videoRef.current;
+    const timeline = timelineRef.current;
+    if (!video || !timeline) return;
 
-    const rect = timelineRef.current.getBoundingClientRect();
+    const rect = timeline.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const percentage = Math.max(0, Math.min(1, x / rect.width));
     const time = trimStart + (trimEnd - trimStart) * percentage;
 
-    videoRef.current.currentTime = time;
+    video.currentTime = time;
   };
 
   const handleExport = async () => {
@@ -227,26 +291,174 @@ export default function VideoEditor({
         throw new Error('Video or canvas not available');
       }
 
-      const stream = canvas.captureStream(30);
+      video.pause();
+      setIsPlaying(false);
 
-      video.muted = false;
+      const exportCanvas = document.createElement('canvas');
+      exportCanvas.width = canvas.width;
+      exportCanvas.height = canvas.height;
+      const exportCtx = exportCanvas.getContext('2d')!;
+
+      const canvasStream = exportCanvas.captureStream(30);
+
       const audioContext = new AudioContext();
-      const source = audioContext.createMediaElementSource(video);
-      const dest = audioContext.createMediaStreamDestination();
+      const audioSource = audioContext.createMediaElementSource(video.cloneNode(true) as HTMLVideoElement);
+
+      const clonedVideo = document.createElement('video');
+      clonedVideo.src = videoUrlRef.current!;
+      clonedVideo.muted = false;
+      await new Promise<void>((resolve) => {
+        clonedVideo.onloadedmetadata = () => resolve();
+      });
+
+      const audioCtx = new AudioContext();
+      const source = audioCtx.createMediaElementSource(clonedVideo);
+      const dest = audioCtx.createMediaStreamDestination();
       source.connect(dest);
-      source.connect(audioContext.destination);
+      source.connect(audioCtx.destination);
 
-      const audioTrack = dest.stream.getAudioTracks()[0];
-      if (audioTrack) {
-        stream.addTrack(audioTrack);
-      }
+      const combinedStream = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...dest.stream.getAudioTracks()
+      ]);
 
-      const mediaRecorder = new MediaRecorder(stream, {
+      const mediaRecorder = new MediaRecorder(combinedStream, {
         mimeType: 'video/webm;codecs=vp9,opus',
-        videoBitsPerPerSecond: 5000000,
+        videoBitsPerSecond: 5000000,
       });
 
       const chunks: Blob[] = [];
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          chunks.push(e.data);
+        }
+      };
+
+      await new Promise<void>((resolve, reject) => {
+        mediaRecorder.onstop = () => {
+          const blob = new Blob(chunks, { type: 'video/webm' });
+          audioCtx.close();
+          clonedVideo.remove();
+          onSave(blob);
+          setIsProcessing(false);
+          resolve();
+        };
+
+        mediaRecorder.onerror = () => {
+          reject(new Error('Recording failed'));
+        };
+
+        clonedVideo.currentTime = trimStart;
+        clonedVideo.onseeked = () => {
+          mediaRecorder.start();
+          clonedVideo.play();
+
+          const drawExportFrame = () => {
+            if (clonedVideo.currentTime >= trimEnd || clonedVideo.paused) {
+              clonedVideo.pause();
+              mediaRecorder.stop();
+              return;
+            }
+
+            exportCtx.filter = `brightness(${effects.brightness}%) contrast(${effects.contrast}%) saturate(${effects.saturation}%) blur(${effects.blur}px)`;
+            exportCtx.drawImage(clonedVideo, 0, 0, exportCanvas.width, exportCanvas.height);
+            exportCtx.filter = 'none';
+
+            if (subtitle.text.trim()) {
+              drawSubtitleToContext(exportCtx, exportCanvas.width, exportCanvas.height);
+            }
+
+            requestAnimationFrame(drawExportFrame);
+          };
+
+          drawExportFrame();
+        };
+      });
+
+    } catch (error) {
+      console.error('Export failed:', error);
+      setIsProcessing(false);
+      onSave(videoBlob);
+    }
+  };
+
+  const drawSubtitleToContext = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
+    ctx.font = `${subtitle.fontWeight} ${subtitle.fontSize}px ${subtitle.fontFamily}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const lines = subtitle.text.split('\n');
+    const lineHeight = subtitle.fontSize * 1.3;
+    const totalHeight = lines.length * lineHeight;
+
+    let yPosition: number;
+    if (subtitle.position === 'top') {
+      yPosition = height * 0.15;
+    } else if (subtitle.position === 'center') {
+      yPosition = height / 2 - totalHeight / 2 + lineHeight / 2;
+    } else {
+      yPosition = height * 0.85 - totalHeight / 2;
+    }
+
+    lines.forEach((line, index) => {
+      const y = yPosition + index * lineHeight;
+      const x = width / 2;
+
+      const metrics = ctx.measureText(line);
+      const padding = 20;
+      const bgX = x - metrics.width / 2 - padding;
+      const bgY = y - subtitle.fontSize / 2 - padding / 2;
+      const bgWidth = metrics.width + padding * 2;
+      const bgHeight = subtitle.fontSize + padding;
+
+      ctx.fillStyle = subtitle.backgroundColor;
+      ctx.fillRect(bgX, bgY, bgWidth, bgHeight);
+
+      if (subtitle.strokeWidth > 0) {
+        ctx.strokeStyle = subtitle.strokeColor;
+        ctx.lineWidth = subtitle.strokeWidth;
+        ctx.strokeText(line, x, y);
+      }
+
+      ctx.fillStyle = subtitle.color;
+      ctx.fillText(line, x, y);
+    });
+  };
+
+  const handleSimpleExport = async () => {
+    setIsProcessing(true);
+
+    try {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      if (!video || !canvas) {
+        throw new Error('Video or canvas not available');
+      }
+
+      video.pause();
+      setIsPlaying(false);
+
+      const hasEdits = subtitle.text.trim() ||
+        effects.brightness !== 100 ||
+        effects.contrast !== 100 ||
+        effects.saturation !== 100 ||
+        effects.blur !== 0 ||
+        trimStart > 0 ||
+        trimEnd < duration;
+
+      if (!hasEdits) {
+        onSave(videoBlob);
+        setIsProcessing(false);
+        return;
+      }
+
+      const canvasStream = canvas.captureStream(30);
+
+      const chunks: Blob[] = [];
+      const mediaRecorder = new MediaRecorder(canvasStream, {
+        mimeType: 'video/webm;codecs=vp9',
+        videoBitsPerSecond: 5000000,
+      });
 
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) {
@@ -254,37 +466,41 @@ export default function VideoEditor({
         }
       };
 
-      mediaRecorder.onstop = () => {
-        const blob = new Blob(chunks, { type: 'video/webm' });
-        video.muted = true;
-        audioContext.close();
-        onSave(blob);
-        setIsProcessing(false);
-      };
+      await new Promise<void>((resolve, reject) => {
+        mediaRecorder.onstop = () => {
+          const blob = new Blob(chunks, { type: 'video/webm' });
+          onSave(blob);
+          setIsProcessing(false);
+          resolve();
+        };
 
-      video.currentTime = trimStart;
-      await new Promise((resolve) => {
-        video.onseeked = resolve;
+        mediaRecorder.onerror = () => {
+          reject(new Error('Recording failed'));
+        };
+
+        video.currentTime = trimStart;
+
+        const startRecording = () => {
+          mediaRecorder.start();
+          video.play();
+
+          const checkEnd = () => {
+            if (video.currentTime >= trimEnd || video.paused || video.ended) {
+              video.pause();
+              setTimeout(() => mediaRecorder.stop(), 100);
+              return;
+            }
+            requestAnimationFrame(checkEnd);
+          };
+          checkEnd();
+        };
+
+        video.onseeked = startRecording;
       });
-
-      mediaRecorder.start();
-      await video.play();
-
-      const checkTime = () => {
-        if (video.currentTime >= trimEnd) {
-          video.pause();
-          mediaRecorder.stop();
-        } else {
-          requestAnimationFrame(checkTime);
-        }
-      };
-
-      checkTime();
 
     } catch (error) {
       console.error('Export failed:', error);
       setIsProcessing(false);
-      alert('Export failed. The video will be saved without edits.');
       onSave(videoBlob);
     }
   };
@@ -302,7 +518,7 @@ export default function VideoEditor({
     'Palatino',
   ];
 
-  const progressPercentage = duration > 0
+  const progressPercentage = duration > 0 && trimEnd > trimStart
     ? ((currentTime - trimStart) / (trimEnd - trimStart)) * 100
     : 0;
 
@@ -332,19 +548,24 @@ export default function VideoEditor({
                 ref={videoRef}
                 className="hidden"
                 playsInline
-                muted
+                preload="auto"
               />
               <canvas
                 ref={canvasRef}
                 className="max-w-full max-h-full object-contain"
               />
+              {!videoReady && (
+                <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
+                  <div className="text-white">Loading video...</div>
+                </div>
+              )}
             </div>
 
             <div className="space-y-4">
               <div className="flex items-center gap-4">
                 <button
                   onClick={togglePlayPause}
-                  disabled={isProcessing}
+                  disabled={isProcessing || !videoReady}
                   className="p-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-lg transition-colors"
                 >
                   {isPlaying ? (
@@ -355,10 +576,21 @@ export default function VideoEditor({
                 </button>
                 <button
                   onClick={resetVideo}
-                  disabled={isProcessing}
+                  disabled={isProcessing || !videoReady}
                   className="p-3 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 rounded-lg transition-colors"
                 >
                   <RotateCcw className="w-5 h-5 text-white" />
+                </button>
+                <button
+                  onClick={toggleMute}
+                  disabled={isProcessing || !videoReady}
+                  className="p-3 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 rounded-lg transition-colors"
+                >
+                  {isMuted ? (
+                    <VolumeX className="w-5 h-5 text-white" />
+                  ) : (
+                    <Volume2 className="w-5 h-5 text-white" />
+                  )}
                 </button>
                 <div className="flex-1">
                   <div
@@ -381,12 +613,12 @@ export default function VideoEditor({
               </div>
 
               <button
-                onClick={handleExport}
-                disabled={isProcessing}
+                onClick={handleSimpleExport}
+                disabled={isProcessing || !videoReady}
                 className="w-full py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold text-white flex items-center justify-center gap-2 transition-colors"
               >
                 <Download className="w-5 h-5" />
-                {isProcessing ? 'Processing Video...' : 'Save & Download Edited Video'}
+                {isProcessing ? 'Processing Video...' : 'Save & Export Edited Video'}
               </button>
             </div>
           </div>
@@ -603,7 +835,7 @@ export default function VideoEditor({
                     <input
                       type="range"
                       min="0"
-                      max={trimEnd - 0.1}
+                      max={Math.max(0, trimEnd - 0.1)}
                       step="0.1"
                       value={trimStart}
                       onChange={(e) => {

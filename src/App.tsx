@@ -35,16 +35,18 @@ function App() {
   }, []);
 
   const loadSubtitleStyles = async () => {
-    const { data, error } = await supabase
-      .from('subtitle_styles')
-      .select('*')
-      .order('is_default', { ascending: false });
+    try {
+      const { data, error } = await supabase
+        .from('subtitle_styles')
+        .select('*')
+        .order('is_default', { ascending: false });
 
-    if (!error && data) {
-      setSubtitleStyles(data);
-      if (data.length > 0) {
+      if (!error && data && data.length > 0) {
+        setSubtitleStyles(data);
         setSelectedStyleId(data[0].id);
       }
+    } catch (err) {
+      console.error('Failed to load subtitle styles:', err);
     }
   };
 
@@ -230,12 +232,12 @@ function App() {
   const canGenerate = videoFile && !isProcessing && clipCount > 0 && clipDuration > 0;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50">
       <div className="container mx-auto px-4 py-8">
         <header className="text-center mb-12">
           <div className="flex items-center justify-center gap-3 mb-4">
             <Scissors className="w-12 h-12 text-blue-600" />
-            <h1 className="text-5xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+            <h1 className="text-5xl font-bold bg-gradient-to-r from-blue-600 to-cyan-600 bg-clip-text text-transparent">
               ShortClip Pro
             </h1>
           </div>
@@ -281,7 +283,7 @@ function App() {
                   disabled={!canGenerate}
                   className={`w-full flex items-center justify-center gap-3 px-8 py-4 rounded-lg font-semibold text-lg transition-all ${
                     canGenerate
-                      ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:from-blue-700 hover:to-purple-700 shadow-lg hover:shadow-xl transform hover:scale-105'
+                      ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white hover:from-blue-700 hover:to-cyan-700 shadow-lg hover:shadow-xl transform hover:scale-105'
                       : 'bg-gray-300 text-gray-500 cursor-not-allowed'
                   }`}
                 >

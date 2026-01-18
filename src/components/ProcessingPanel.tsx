@@ -105,7 +105,7 @@ export function ProcessingPanel({
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setEditingClip(clip.index)}
-                  className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+                  className="flex items-center gap-2 px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors"
                 >
                   <Edit className="w-4 h-4" />
                   Edit
