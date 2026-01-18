@@ -52,7 +52,7 @@ export default function VideoEditor({
   const videoUrlRef = useRef<string | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [trimStart, setTrimStart] = useState(0);
@@ -152,6 +152,9 @@ export default function VideoEditor({
     const video = videoRef.current;
     if (!video) return;
 
+    video.muted = true;
+    setIsMuted(true);
+
     videoUrlRef.current = URL.createObjectURL(videoBlob);
     video.src = videoUrlRef.current;
     video.load();
@@ -162,6 +165,7 @@ export default function VideoEditor({
       setTrimStart(0);
       setTrimEnd(dur);
       setVideoReady(true);
+      video.muted = true;
       drawFrame();
     };
 
@@ -184,11 +188,14 @@ export default function VideoEditor({
     video.addEventListener('ended', handleEnded);
 
     return () => {
+      video.pause();
+      video.muted = true;
       video.removeEventListener('loadedmetadata', handleLoadedMetadata);
       video.removeEventListener('timeupdate', handleTimeUpdate);
       video.removeEventListener('ended', handleEnded);
       if (videoUrlRef.current) {
         URL.revokeObjectURL(videoUrlRef.current);
+        videoUrlRef.current = null;
       }
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
@@ -533,7 +540,14 @@ export default function VideoEditor({
             </h2>
           </div>
           <button
-            onClick={onClose}
+            onClick={() => {
+              const video = videoRef.current;
+              if (video) {
+                video.pause();
+                video.muted = true;
+              }
+              onClose();
+            }}
             className="p-2 hover:bg-gray-800 rounded-lg transition-colors"
             disabled={isProcessing}
           >
@@ -549,6 +563,7 @@ export default function VideoEditor({
                 className="hidden"
                 playsInline
                 preload="auto"
+                muted
               />
               <canvas
                 ref={canvasRef}
